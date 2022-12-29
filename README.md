@@ -91,7 +91,7 @@ run the program passed in as a parameter. The problem with that is:
 
 1. It's an I/O blocking operation
 2. Once triggered the program will run, there is no way back. That's equivalent
- of droping down a pebble at the top of a cliff
+ of dropping down a pebble at the top of a cliff
 
 What I propose is to create 2 new syscalls:
 
