@@ -23,8 +23,6 @@ long syscall(long nr_number, ...);
 /* syscall IDs */
 #define __NR_read     0
 #define __NR_write    1
-#define __NR_getpid   39
-#define __NR_time     201
 
 #endif /* INCLUDE_LIBC_INTERNAL_SYSCALL_H_ */
 
