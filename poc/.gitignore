@@ -1,0 +1,10 @@
+# Build folder
+build/
+
+# vim swap files
+*.swp
+
+# Eclipse
+.cproject
+.project
+.settings/
