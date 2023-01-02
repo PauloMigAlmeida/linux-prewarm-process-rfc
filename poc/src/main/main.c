@@ -2,17 +2,19 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdbool.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #define PROG_SIZE	1024
-#define MAX_PROG_IN_MEM 20
+#define MAX_PROG_IN_MEM 5000
 #define	NORMAL_MODE	0
 #define	PREWARM_MODE	1
 
 /* CLI arguments */
 static int run_mode;
 static char progs_path[255];
-static int desired_prog_count;
+static unsigned int desired_prog_count;
 
 /*
  * ELF section .bss is by default non-executable, so we have
@@ -27,7 +29,8 @@ static int desired_prog_count;
  * state.
  */
 static char _xbss mem[MAX_PROG_IN_MEM * PROG_SIZE];
-static int loaded_prog_count;
+static size_t loaded_prog_count;
+static bool loading_prog_status[MAX_PROG_IN_MEM];
 pthread_mutex_t lock;
 
 void read_program(int thread_id, char* dest, size_t len, char *path){
@@ -41,31 +44,37 @@ void read_program(int thread_id, char* dest, size_t len, char *path){
 
 void* thread_read_program(void* data) {
         char path[512];
-        int thread_id = *(int*)data;
+	int thread_id = ((uintptr_t)data - (uintptr_t)mem) / PROG_SIZE;
 
         memset(path, 0, sizeof(path));
         snprintf(path, sizeof(path), "%s/program%d.o", progs_path, 1);
-        read_program(thread_id,
-                     mem + ((thread_id - 1) * PROG_SIZE),
-                     PROG_SIZE, path);
+        read_program(thread_id, data, PROG_SIZE, path);
 
         pthread_mutex_lock(&lock);
         loaded_prog_count++;
+	loading_prog_status[thread_id] = true;
         pthread_mutex_unlock(&lock);
-        free(data);
         return NULL;
 }
 
-void prewarm_programs(int count){
+void* thread_prewarm_programs(void* data) {
+	size_t count = *(size_t*)data;
         pthread_t thread;
-        for (int i=1; i <= count; i++) {
-                int *thread_id_arg = malloc(sizeof(int));
-                *thread_id_arg = i;
-                pthread_create(&thread, NULL, &thread_read_program, thread_id_arg);
+        for (size_t i=0; i < count; i++) {
+                pthread_create(&thread, 
+				NULL, 
+				&thread_read_program, 
+				mem + (i * PROG_SIZE));
         }
+	return NULL;
+}
 
-        while(loaded_prog_count < count)
-                /* do nothing */ ;
+void prewarm_programs(size_t count){
+	pthread_t thread;
+	pthread_create(&thread,
+			NULL,
+			&thread_prewarm_programs,
+			&count);
 }
 
 
@@ -83,7 +92,11 @@ void do_run(char* src) {
 
 void run_program(int prog_num) {
         if (run_mode == PREWARM_MODE) {
-                do_run(mem + ((prog_num - 1) * PROG_SIZE));
+		int prog_id = prog_num - 1;
+		while(!loading_prog_status[prog_id])
+			/* we block it */;
+
+                do_run(mem + (prog_id * PROG_SIZE));
         } else {
                 char path[512];
                 memset(path, 0, sizeof(path));
@@ -99,7 +112,7 @@ void run_program(int prog_num) {
  * (the one we are trying to implement)
  * @param count - Number of programs to be executed
  */
-void run_mocked_script(int count) {
+void run_mocked_script(size_t count) {
         /*
          * in theory, we should run the equivalent
          * of the following bash script:
@@ -112,7 +125,7 @@ void run_mocked_script(int count) {
         if (run_mode == PREWARM_MODE)
                 prewarm_programs(count);
 
-        for (int i = 1; i <= count; i++){
+        for (size_t i = 1; i <= count; i++){
                 run_program(i);
         }
 }
@@ -150,6 +163,6 @@ alloc_err:
         printf("there is no space in the XBSS ELF section"
                "to accomodate that many executable. Since this is"
                "allocated a compilation phase, tweak the constant"
-               "MAX_PROG_IN_MEM and recompile it. exiting");
+               "MAX_PROG_IN_MEM and recompile it. exiting\n");
         return -1;
 }
