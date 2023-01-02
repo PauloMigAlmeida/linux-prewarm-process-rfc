@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <dirent.h>
 
@@ -15,8 +16,11 @@ static char progs_path[255];
  * the idea is to avoid malloc'ing that area as brk syscall's
  * latency can vary depeding on system's memory fragmentation
  * state.
+ *
+ * ELF section .bss is by default non-executable, so we place
+ * it in a bss-like section with X flag set.
  */
-static char mem[4096];
+static char __attribute__((section(".xbss,\"awx\",@progbits#"))) mem[4096];
 static int prog_count;
 
 void read_program(char* dest, size_t len, char *path){
@@ -52,7 +56,15 @@ void prewarm_programs(void){
 
 
 void do_run(char* src) {
-	printf("do_run was called\n");
+	long rdi, rax;
+
+	rdi = (uint64_t) src;
+	asm volatile(
+		"call %[fnc] \n\t"
+		: "=&a" (rax)
+		: [fnc] "D" (rdi)
+		: "memory"
+	);
 }
 
 void run_program(int prog_num) {
@@ -76,14 +88,9 @@ void run_mocked_script(void) {
 	 * ...
 	 *
 	 * the only difference will be whether we will
-	 * load the executables when we need them (which 
-	 * is how bash currently does it which is undoubtedly
-	 * more memory efficient) or load them at the beginning
-	 * and then just execute it from memory (which will
-	 * require more memory available to accomodate all
-	 * instances of the executables but it should be faster
-	 * to execute the whole script as we don't waste CPU cycles 
-	 * waiting for the program to be loaded into memory)
+	 * load the executables when we need them or
+	 * load them at the beginning and then fetch 
+	 * programs from memory as we need each of them
 	 */
 
 	if (run_mode == PREWARM_MODE)

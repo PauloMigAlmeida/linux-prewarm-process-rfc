@@ -13,7 +13,7 @@ _start:
 
 	; execute program
 _pre_main:
-	call main - $ - 1
+	call main
 
 	; restore registers
 	popaq
@@ -35,11 +35,6 @@ main:
 	mov	rdx,	content_length		; size_t count
 	mov	rax,	1			; sys_write
 	syscall
-
-	; syscall exit (temporary)
-;	mov	rdi,	0		; int error_code
-;	mov	rax,	60		; sys_exit
-;	syscall
 
 	; restore registers
 	popaq
