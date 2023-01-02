@@ -2,10 +2,10 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <dirent.h>
+#include <pthread.h>
 
 #define MAX_PROG_SIZE	1024
-#define	NORMAL_MODE	0
+#define	NORMAL_MODE	    0
 #define	PREWARM_MODE	1
 
 static int run_mode;
@@ -20,8 +20,10 @@ static char progs_path[255];
  * ELF section .bss is by default non-executable, so we place
  * it in a bss-like section with X flag set.
  */
-static char __attribute__((section(".xbss,\"awx\",@progbits#"))) mem[4096];
+#define _xbss __attribute__((section(".xbss,\"awx\",@progbits#")))
+static char _xbss mem[4096];
 static int prog_count;
+pthread_mutex_t lock;
 
 void read_program(char* dest, size_t len, char *path){
 	FILE *fp;
@@ -29,29 +31,29 @@ void read_program(char* dest, size_t len, char *path){
 	
 	fp = fopen(path, "r");
 	fread(dest, len, 1, fp);
-        fclose(fp);
+    fclose(fp);
 }
 
-void prewarm_programs(void){
-	DIR *d;
-	struct dirent *dir;
-	char path[512];
+void* thread_read_program(void* data) {
+    char path[512];
+    memset(path, 0, sizeof(path));
+    snprintf(path, sizeof(path), "%s/program%d.o", progs_path, *((int*)data));
+    read_program(mem + (prog_count * MAX_PROG_SIZE),MAX_PROG_SIZE, path);
 
-	if ((d = opendir(progs_path))) {
-		while ((dir = readdir(d)) != NULL) {
-			if(strcmp(dir->d_name, ".") && strcmp(dir->d_name, "..")){
-				printf("found %s/%s\n", progs_path, dir->d_name);
-	
-				memset(path, 0, sizeof(path));
-				snprintf(path, sizeof(path), "%s/%s", progs_path, dir->d_name);
+    pthread_mutex_lock(&lock);
+    prog_count++;
+    pthread_mutex_unlock(&lock);
+    return NULL;
+}
 
-				read_program(mem + (prog_count * MAX_PROG_SIZE),
-					     MAX_PROG_SIZE, path);
-				prog_count++;
-			}
-		}
-		closedir(d);
-	}	
+void prewarm_programs(int num){
+    pthread_t thread;
+    for (int i=0; i < num; i++) {
+        pthread_create(&thread, NULL, &thread_read_program, &i);
+    }
+
+    while(prog_count < num)
+        /* do nothing */ ;
 }
 
 
@@ -81,7 +83,7 @@ void run_program(int prog_num) {
 
 void run_mocked_script(void) {
 	/* 
-	 * in theory we should run the equivalent 
+	 * in theory, we should run the equivalent
 	 * of the following bash script:
 	 *
 	 * ./program1
@@ -94,7 +96,7 @@ void run_mocked_script(void) {
 	 */
 
 	if (run_mode == PREWARM_MODE)
-		prewarm_programs();
+		prewarm_programs(1);
 
 	run_program(1);
 
@@ -102,19 +104,27 @@ void run_mocked_script(void) {
 
 int main(int argc, char **argv) {
 	if (argc != 3)
-		goto err;
+		goto arg_err;
 	
 	run_mode = atoi(argv[1]);
 	if (run_mode != NORMAL_MODE && run_mode != PREWARM_MODE)
-			goto err;
+			goto arg_err;
 
 	memcpy(progs_path, argv[2], strlen(argv[2]));
 
-	run_mocked_script();		
-	return 0;
+    if (pthread_mutex_init(&lock, NULL))
+        goto mutex_err;
 
-err:
+    run_mocked_script();
+    return 0;
+
+arg_err:
 	printf("error while parsing arguments ... exiting\n"
 	       "usage: ./main <run_mode> <progs_path>\n");
+    return -1;
+mutex_err:
+    printf("couldn't initialise pthread "
+           "mutex lock ... exiting\n");
+    return -1;
 }
 
