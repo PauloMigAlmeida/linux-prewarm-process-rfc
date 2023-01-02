@@ -24,17 +24,16 @@ main:
 	pushaq
 
 	; Syscall write
-	mov	rdi,	1		; unsigned int fd -> stdout
-	;	-> obtain main's RIP from stack frame
-	mov	rsi,	rsp
+	mov	rdi,	1			; unsigned int fd -> stdout
+
+	mov	rsi,	rsp			; obtain main's RIP from stack frame 
 	add	rsi,	8 * 15
 	mov	rsi,	[rsi]
-	;	-> substract CALL's opcode size
-	sub	rsi,	5
-	;	-> calculate relative (PIC) position of string to be printed
-	add	rsi,	content - _pre_main
-	mov	rdx,	content_length	; size_t count
-	mov	rax,	1		; sys_write
+	sub	rsi,	5			; substract CALL's opcode size 
+	add	rsi,	content - _pre_main	; calc relative (PIC) position of content
+
+	mov	rdx,	content_length		; size_t count
+	mov	rax,	1			; sys_write
 	syscall
 
 	; syscall exit (temporary)
