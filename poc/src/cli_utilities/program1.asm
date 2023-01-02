@@ -5,7 +5,7 @@
 
 global _start
 
-section .text
+;section .text
 
 _start:
 	; preserve all registers
@@ -37,15 +37,15 @@ main:
 	syscall
 
 	; syscall exit (temporary)
-	mov	rdi,	0		; int error_code
-	mov	rax,	60		; sys_exit
-	syscall
+;	mov	rdi,	0		; int error_code
+;	mov	rax,	60		; sys_exit
+;	syscall
 
 	; restore registers
 	popaq
 	ret
 
-section .data
+;section .data
 
 content		db	"test",CR,LF, 0
 content_length	equ	$ - content
