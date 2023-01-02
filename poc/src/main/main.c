@@ -4,127 +4,152 @@
 #include <string.h>
 #include <pthread.h>
 
-#define MAX_PROG_SIZE	1024
-#define	NORMAL_MODE	    0
+#define PROG_SIZE	1024
+#define MAX_PROG_IN_MEM 20
+#define	NORMAL_MODE	0
 #define	PREWARM_MODE	1
 
+/* CLI arguments */
 static int run_mode;
 static char progs_path[255];
+static int desired_prog_count;
 
-/* 
+/*
+ * ELF section .bss is by default non-executable, so we have
+ * to place executables in a bss-like section with X flag set.
+ */
+#define _xbss __attribute__((section(".xbss,\"awx\",@progbits#")))
+
+/*
  * this is where purposely-crafted programs will be loaded to.
  * the idea is to avoid malloc'ing that area as brk syscall's
  * latency can vary depeding on system's memory fragmentation
  * state.
- *
- * ELF section .bss is by default non-executable, so we place
- * it in a bss-like section with X flag set.
  */
-#define _xbss __attribute__((section(".xbss,\"awx\",@progbits#")))
-static char _xbss mem[4096];
-static int prog_count;
+static char _xbss mem[MAX_PROG_IN_MEM * PROG_SIZE];
+static int loaded_prog_count;
 pthread_mutex_t lock;
 
-void read_program(char* dest, size_t len, char *path){
-	FILE *fp;
-	printf("loading program %s\n", path);
-	
-	fp = fopen(path, "r");
-	fread(dest, len, 1, fp);
-    fclose(fp);
+void read_program(int thread_id, char* dest, size_t len, char *path){
+        FILE *fp;
+        printf("[thread id: %d] :: loading program %s\n", thread_id, path);
+
+        fp = fopen(path, "r");
+        fread(dest, len, 1, fp);
+        fclose(fp);
 }
 
 void* thread_read_program(void* data) {
-    char path[512];
-    memset(path, 0, sizeof(path));
-    snprintf(path, sizeof(path), "%s/program%d.o", progs_path, *((int*)data));
-    read_program(mem + (prog_count * MAX_PROG_SIZE),MAX_PROG_SIZE, path);
+        char path[512];
+        int thread_id = *(int*)data;
 
-    pthread_mutex_lock(&lock);
-    prog_count++;
-    pthread_mutex_unlock(&lock);
-    return NULL;
+        memset(path, 0, sizeof(path));
+        snprintf(path, sizeof(path), "%s/program%d.o", progs_path, 1);
+        read_program(thread_id,
+                     mem + ((thread_id - 1) * PROG_SIZE),
+                     PROG_SIZE, path);
+
+        pthread_mutex_lock(&lock);
+        loaded_prog_count++;
+        pthread_mutex_unlock(&lock);
+        free(data);
+        return NULL;
 }
 
-void prewarm_programs(int num){
-    pthread_t thread;
-    for (int i=0; i < num; i++) {
-        pthread_create(&thread, NULL, &thread_read_program, &i);
-    }
+void prewarm_programs(int count){
+        pthread_t thread;
+        for (int i=1; i <= count; i++) {
+                int *thread_id_arg = malloc(sizeof(int));
+                *thread_id_arg = i;
+                pthread_create(&thread, NULL, &thread_read_program, thread_id_arg);
+        }
 
-    while(prog_count < num)
-        /* do nothing */ ;
+        while(loaded_prog_count < count)
+                /* do nothing */ ;
 }
 
 
 void do_run(char* src) {
-	long rdi, rax;
+        long rdi, rax;
 
-	rdi = (uint64_t) src;
-	asm volatile(
-		"call %[fnc] \n\t"
-		: "=&a" (rax)
-		: [fnc] "D" (rdi)
-		: "memory"
-	);
+        rdi = (uint64_t) src;
+        asm volatile(
+                "call %[fnc] \n\t"
+                : "=&a" (rax)
+                : [fnc] "D" (rdi)
+                : "memory"
+        );
 }
 
 void run_program(int prog_num) {
-	if (run_mode == PREWARM_MODE) {
-		do_run(mem + ((prog_num - 1) * MAX_PROG_SIZE));
-	} else {
-		char path[512];
-		memset(path, 0, sizeof(path));
-		snprintf(path, sizeof(path), "%s/program%d.o", progs_path, prog_num);
-		read_program(mem, MAX_PROG_SIZE, path);
-		do_run(mem);
-	}
+        if (run_mode == PREWARM_MODE) {
+                do_run(mem + ((prog_num - 1) * PROG_SIZE));
+        } else {
+                char path[512];
+                memset(path, 0, sizeof(path));
+                snprintf(path, sizeof(path), "%s/program%d.o", progs_path, 1);
+                read_program(0, mem, PROG_SIZE, path);
+                do_run(mem);
+        }
 }
 
-void run_mocked_script(void) {
-	/* 
-	 * in theory, we should run the equivalent
-	 * of the following bash script:
-	 *
-	 * ./program1
-	 * ...
-	 *
-	 * the only difference will be whether we will
-	 * load the executables when we need them or
-	 * load them at the beginning and then fetch 
-	 * programs from memory as we need each of them
-	 */
+/**
+ * simulates bash execution environment with both
+ * sync mode (current behaviour) and prewarm mode
+ * (the one we are trying to implement)
+ * @param count - Number of programs to be executed
+ */
+void run_mocked_script(int count) {
+        /*
+         * in theory, we should run the equivalent
+         * of the following bash script:
+         *
+         * ./program1
+         * ...
+         * ./program<count>
+         */
 
-	if (run_mode == PREWARM_MODE)
-		prewarm_programs(1);
+        if (run_mode == PREWARM_MODE)
+                prewarm_programs(count);
 
-	run_program(1);
-
+        for (int i = 1; i <= count; i++){
+                run_program(i);
+        }
 }
 
 int main(int argc, char **argv) {
-	if (argc != 3)
-		goto arg_err;
-	
-	run_mode = atoi(argv[1]);
-	if (run_mode != NORMAL_MODE && run_mode != PREWARM_MODE)
-			goto arg_err;
+        if (argc != 4)
+                goto arg_err;
 
-	memcpy(progs_path, argv[2], strlen(argv[2]));
+        run_mode = atoi(argv[1]);
+        if (run_mode != NORMAL_MODE && run_mode != PREWARM_MODE)
+                goto arg_err;
 
-    if (pthread_mutex_init(&lock, NULL))
-        goto mutex_err;
+        desired_prog_count = atoi(argv[2]);
+        if (desired_prog_count * PROG_SIZE > sizeof(mem))
+                goto alloc_err;
 
-    run_mocked_script();
-    return 0;
+        memcpy(progs_path, argv[3], strlen(argv[3]));
+
+        if (pthread_mutex_init(&lock, NULL))
+                goto mutex_err;
+
+        run_mocked_script(desired_prog_count);
+        return 0;
 
 arg_err:
-	printf("error while parsing arguments ... exiting\n"
-	       "usage: ./main <run_mode> <progs_path>\n");
-    return -1;
+        printf("error while parsing arguments ... exiting\n"
+               "usage: ./main <run_mode> <desired_num_progs>"
+               " <progs_path>\n");
+        return -1;
 mutex_err:
-    printf("couldn't initialise pthread "
-           "mutex lock ... exiting\n");
-    return -1;
+        printf("couldn't initialise pthread "
+               "mutex lock ... exiting\n");
+        return -1;
+alloc_err:
+        printf("there is no space in the XBSS ELF section"
+               "to accomodate that many executable. Since this is"
+               "allocated a compilation phase, tweak the constant"
+               "MAX_PROG_IN_MEM and recompile it. exiting");
+        return -1;
 }
-
