@@ -49,3 +49,6 @@ main:
 
 content		db	"test",CR,LF, 0
 content_length	equ	$ - content
+
+; Zero-pad utility so they all have the same size
+times 1024-($-$$) db 0
