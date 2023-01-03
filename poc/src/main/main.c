@@ -9,7 +9,7 @@
 #define PROG_SIZE	1024
 #define MAX_PROG_IN_MEM 5000
 #define	NORMAL_MODE	0
-#define	PREWARM_MODE	1
+#define	ONDEMAND_MODE	1
 
 /* CLI arguments */
 static int run_mode;
@@ -30,46 +30,25 @@ static unsigned int desired_prog_count;
  */
 static char _xbss mem[MAX_PROG_IN_MEM * PROG_SIZE];
 static bool loading_prog_status[MAX_PROG_IN_MEM];
-static pthread_attr_t attr;
 
-void read_program(int thread_id, char* dest, size_t len, char *path){
+void do_read_program(char* dest, size_t len, char *path){
         FILE *fp;
-        printf("[thread id: %d] :: loading program %s\n", thread_id, path);
+        printf("loading program %s\n", path);
 
         fp = fopen(path, "r");
         fread(dest, len, 1, fp);
         fclose(fp);
 }
 
-void* thread_read_program(void* data) {
+void read_program(void* data) {
         char path[512];
-	int thread_id = ((uintptr_t)data - (uintptr_t)mem) / PROG_SIZE;
+	int prog_id = ((uintptr_t)data - (uintptr_t)mem) / PROG_SIZE;
 
         memset(path, 0, sizeof(path));
         snprintf(path, sizeof(path), "%s/program%d.o", progs_path, 1);
-        read_program(thread_id, data, PROG_SIZE, path);
-	loading_prog_status[thread_id] = true;
-        return NULL;
-}
 
-void* thread_prewarm_programs(void* data) {
-	size_t count = *(size_t*)data;
-        pthread_t thread;
-        for (size_t i=0; i < count; i++) {
-                pthread_create(&thread, 
-				&attr, 
-				&thread_read_program, 
-				mem + (i * PROG_SIZE));
-        }
-	return NULL;
-}
-
-void prewarm_programs(size_t count){
-	pthread_t thread;
-	pthread_create(&thread,
-			NULL,
-			&thread_prewarm_programs,
-			&count);
+        do_read_program(data, PROG_SIZE, path);
+	loading_prog_status[prog_id] = true;
 }
 
 
@@ -86,24 +65,20 @@ void do_run(char* src) {
 }
 
 void run_program(int prog_num) {
-        if (run_mode == PREWARM_MODE) {
-		int prog_id = prog_num - 1;
-		while(!loading_prog_status[prog_id])
-			/* we block it */;
+	int prog_id = prog_num - 1;
+	char* dst = mem + (prog_id * PROG_SIZE);
 
-                do_run(mem + (prog_id * PROG_SIZE));
-        } else {
-                char path[512];
-                memset(path, 0, sizeof(path));
-                snprintf(path, sizeof(path), "%s/program%d.o", progs_path, 1);
-                read_program(0, mem, PROG_SIZE, path);
-                do_run(mem);
-        }
+	/* reads program in ondemand_mode only if needed 
+	 * or always if in normal_mode */
+        if (run_mode == NORMAL_MODE || !loading_prog_status[prog_id])	
+		read_program(dst);
+
+	do_run(mem);
 }
 
 /**
  * simulates bash execution environment with both
- * sync mode (current behaviour) and prewarm mode
+ * sync mode (current behaviour) and on-demand mode
  * (the one we are trying to implement)
  * @param count - Number of programs to be executed
  */
@@ -112,16 +87,16 @@ void run_mocked_script(size_t count) {
          * in theory, we should run the equivalent
          * of the following bash script:
          *
-         * ./program1
+	 * for i in ${1..$count}
+	 * do
+         *	./program1
+         * done 
          * ...
-         * ./program<count>
+         *  >
          */
 
-        if (run_mode == PREWARM_MODE)
-                prewarm_programs(count);
-
         for (size_t i = 1; i <= count; i++){
-                run_program(i);
+                run_program(1);
         }
 }
 
@@ -130,7 +105,7 @@ int main(int argc, char **argv) {
                 goto arg_err;
 
         run_mode = atoi(argv[1]);
-        if (run_mode != NORMAL_MODE && run_mode != PREWARM_MODE)
+        if (run_mode != NORMAL_MODE && run_mode != ONDEMAND_MODE)
                 goto arg_err;
 
         desired_prog_count = atoi(argv[2]);
@@ -138,15 +113,6 @@ int main(int argc, char **argv) {
                 goto alloc_err;
 
         memcpy(progs_path, argv[3], strlen(argv[3]));
-
-	struct sched_param schedParam;
-	schedParam.sched_priority = sched_get_priority_max(SCHED_FIFO);
-	
-	if (pthread_attr_init(&attr) || 
-	    pthread_attr_setschedpolicy(&attr, SCHED_FIFO) ||
-	    //pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED) ||
-	    pthread_attr_setschedparam(&attr, &schedParam))
-		goto pthread_err;
 
         run_mocked_script(desired_prog_count);
         return 0;
@@ -162,7 +128,4 @@ alloc_err:
                "allocated a compilation phase, tweak the constant"
                "MAX_PROG_IN_MEM and recompile it. exiting\n");
         return -1;
-pthread_err:
-	printf("error while initialising pthread... exiting\n");
-	return -1;
 }
