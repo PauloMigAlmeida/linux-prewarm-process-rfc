@@ -14,7 +14,7 @@ CC		:= gcc
 # Notes:
 # 	- gnu99 is used instead of c99 so we can use the GCC inline assembly extensions
 CCFLAGS     	:= -std=gnu99 -I$(DIR_INCLUDE) -g \
-        	       -masm=intel -Wall -Wextra -Wpedantic
+        	       -masm=intel -pthread -Wall -Wextra -Wpedantic
 
 AS          := nasm
 

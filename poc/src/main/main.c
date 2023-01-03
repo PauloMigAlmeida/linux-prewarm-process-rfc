@@ -29,9 +29,8 @@ static unsigned int desired_prog_count;
  * state.
  */
 static char _xbss mem[MAX_PROG_IN_MEM * PROG_SIZE];
-static size_t loaded_prog_count;
 static bool loading_prog_status[MAX_PROG_IN_MEM];
-pthread_mutex_t lock;
+static pthread_attr_t attr;
 
 void read_program(int thread_id, char* dest, size_t len, char *path){
         FILE *fp;
@@ -49,11 +48,7 @@ void* thread_read_program(void* data) {
         memset(path, 0, sizeof(path));
         snprintf(path, sizeof(path), "%s/program%d.o", progs_path, 1);
         read_program(thread_id, data, PROG_SIZE, path);
-
-        pthread_mutex_lock(&lock);
-        loaded_prog_count++;
 	loading_prog_status[thread_id] = true;
-        pthread_mutex_unlock(&lock);
         return NULL;
 }
 
@@ -62,7 +57,7 @@ void* thread_prewarm_programs(void* data) {
         pthread_t thread;
         for (size_t i=0; i < count; i++) {
                 pthread_create(&thread, 
-				NULL, 
+				&attr, 
 				&thread_read_program, 
 				mem + (i * PROG_SIZE));
         }
@@ -144,8 +139,14 @@ int main(int argc, char **argv) {
 
         memcpy(progs_path, argv[3], strlen(argv[3]));
 
-        if (pthread_mutex_init(&lock, NULL))
-                goto mutex_err;
+	struct sched_param schedParam;
+	schedParam.sched_priority = sched_get_priority_max(SCHED_FIFO);
+	
+	if (pthread_attr_init(&attr) || 
+	    pthread_attr_setschedpolicy(&attr, SCHED_FIFO) ||
+	    //pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED) ||
+	    pthread_attr_setschedparam(&attr, &schedParam))
+		goto pthread_err;
 
         run_mocked_script(desired_prog_count);
         return 0;
@@ -155,14 +156,13 @@ arg_err:
                "usage: ./main <run_mode> <desired_num_progs>"
                " <progs_path>\n");
         return -1;
-mutex_err:
-        printf("couldn't initialise pthread "
-               "mutex lock ... exiting\n");
-        return -1;
 alloc_err:
         printf("there is no space in the XBSS ELF section"
                "to accomodate that many executable. Since this is"
                "allocated a compilation phase, tweak the constant"
                "MAX_PROG_IN_MEM and recompile it. exiting\n");
         return -1;
+pthread_err:
+	printf("error while initialising pthread... exiting\n");
+	return -1;
 }
