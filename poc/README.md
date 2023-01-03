@@ -18,7 +18,7 @@ could reach the inflection point. For instance:
 Running in pre-warm mode with 5000 processes took 0.016577848 seconds
 ```
 ```
-Running in normal mode with 5000 processes took 0.004976643 seconds
+Running in normal mode with 5000 processes took 0.04976643 seconds
 ```
 
 Those are good numbers (almost 3x faster) but expecting a script to
